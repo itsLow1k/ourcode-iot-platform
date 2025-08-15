@@ -1,0 +1,228 @@
+services:
+  postgres:
+    image: postgres:17
+    container_name: postgres
+    environment:
+      POSTGRES_USER: "${PG_USER}"
+      POSTGRES_PASSWORD: "${PG_PASSWORD}"
+      POSTGRES_DB: pg_db
+    ports:
+      - "${PG_PORT}:${PG_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER} -d pg_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: redis
+    ports:
+      - "${REDIS_PORT}:${REDIS_PORT}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - redis_data:/data
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: cassandra
+    ports:
+      - "${CASSANDRA_PORT}:${CASSANDRA_PORT}"
+    environment:
+      CASSANDRA_CLUSTER_NAME: "TestCluster"
+      CASSANDRA_KEYSPACE: "appkeyspace"
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES;' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - cassandra_data:/var/lib/cassandra/data
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:latest
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: ${ZOO_PORT}
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "${ZOO_PORT}:${ZOO_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost ${ZOO_PORT} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_datalog:/var/lib/zookeeper/log
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.2
+    container_name: kafka
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:${ZOO_PORT}
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:${KAFKA_PORT}
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    ports:
+      - "${KAFKA_PORT}:${KAFKA_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost ${KAFKA_PORT} || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:latest
+    container_name: schema-registry
+    depends_on:
+      - kafka
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:${KAFKA_PORT}
+    ports:
+      - "${SR_PORT}:${SR_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost ${SR_PORT} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    volumes:
+      - schema_registry_data:/var/lib/schema-registry/data
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD}
+    command: server /data --console-address :${MINIO_CONSOLE_PORT}
+    ports:
+      - "${MINIO_SERVER_PORT}:${MINIO_SERVER_PORT}"
+      - "${MINIO_CONSOLE_PORT}:${MINIO_CONSOLE_PORT}"
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:${MINIO_SERVER_PORT}/minio/health/live || exit 1']
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - minio_data:/data
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: keycloak
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KK_ADMIN}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KK_PASSWORD}
+    command: start-dev
+    ports:
+      - "${KK_PORT}:${KK_PORT}"
+    healthcheck:
+      test: [ "CMD-SHELL", "exec 3<>/dev/tcp/localhost/${KK_PORT}; \
+               printf 'GET /realms/master HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3; \
+               head -n 1 <&3 | grep 200" ]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+
+  camunda:
+    image: camunda/camunda-bpm-platform:run-latest
+    container_name: camunda
+    ports:
+      - "${CAMUNDA_PORT}:${CAMUNDA_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/engine-rest/engine || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    volumes:
+      - camunda_data:/camunda/data
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+    ports:
+      - "${PTH_PORT}:${PTH_PORT}"
+    networks:
+      - observability-net
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost ${PTH_PORT} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "${GR_PORT}:${GR_PORT}"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost ${GR_PORT} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    volumes:
+      - grafana_data:/var/lib/grafana
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres_exporter
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${PG_USER}:${PG_PASSWORD}@postgres:${PG_PORT}/mydb?sslmode=disable"
+    ports:
+      - "${PG_EXPORT_PORT}:${PG_EXPORT_PORT}"
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka_exporter
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKERS: kafka:${KAFKA_PORT}
+    ports:
+      - "${KAFKA_EXPORT_PORT}:${KAFKA_EXPORT_PORT}"
+
+volumes:
+  postgres_data:
+  redis_data:
+  cassandra_data:
+  zookeeper_data:
+  zookeeper_datalog:
+  kafka_data:
+  schema_registry_data:
+  minio_data:
+  keycloak_data:
+  camunda_data:
+  grafana_data:
+
+networks:
+  observability-net:
+    driver: bridge
