@@ -16,6 +16,8 @@ services:
       start_period: 10s
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - observability-net
 
   redis:
     image: redis:7
@@ -29,6 +31,8 @@ services:
       retries: 5
     volumes:
       - redis_data:/data
+    networks:
+      - observability-net
 
   cassandra:
     image: cassandra:4.1
@@ -46,6 +50,8 @@ services:
       start_period: 20s
     volumes:
       - cassandra_data:/var/lib/cassandra/data
+    networks:
+      - observability-net
 
   zookeeper:
     image: confluentinc/cp-zookeeper:latest
@@ -63,6 +69,32 @@ services:
     volumes:
       - zookeeper_data:/var/lib/zookeeper/data
       - zookeeper_datalog:/var/lib/zookeeper/log
+    networks:
+      - observability-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "${KAFKA_UI_PORT}:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: "kafka"               # Имя кластера в UI
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: "kafka:${KAFKA_PORT}" # Адрес вашего Kafka-брокера
+      KAFKA_CLUSTERS_0_ZOOKEEPER: "zookeeper:${ZOO_PORT}"    # Если используется Zookeeper
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: "http://schema-registry:${SR_PORT}"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    networks:
+      - observability-net
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:8080/actuator/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   kafka:
     image: confluentinc/cp-kafka:7.5.2
@@ -84,13 +116,18 @@ services:
       retries: 5
       start_period: 20s
     volumes:
-      - kafka_data:/var/lib/kafka/data
+      - kafka_data1:/var/lib/kafka/data
+    networks:
+      - observability-net
 
   schema-registry:
     image: confluentinc/cp-schema-registry:latest
     container_name: schema-registry
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+      zookeeper:
+        condition: service_healthy
     environment:
       SCHEMA_REGISTRY_HOST_NAME: schema-registry
       SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:${KAFKA_PORT}
@@ -104,6 +141,8 @@ services:
       start_period: 15s
     volumes:
       - schema_registry_data:/var/lib/schema-registry/data
+    networks:
+      - observability-net
 
   minio:
     image: minio/minio:latest
@@ -123,6 +162,8 @@ services:
       start_period: 20s
     volumes:
       - minio_data:/data
+    networks:
+      - observability-net
 
   keycloak:
     image: quay.io/keycloak/keycloak:latest
@@ -143,6 +184,8 @@ services:
       start_period: 30s
     volumes:
       - keycloak_data:/opt/keycloak/data
+    networks:
+      - observability-net
 
   camunda:
     image: camunda/camunda-bpm-platform:run-latest
@@ -157,18 +200,25 @@ services:
       start_period: 20s
     volumes:
       - camunda_data:/camunda/data
+    networks:
+      - observability-net
 
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
     volumes:
-      - ./prometheus/prometheus.yaml:/etc/prometheus/prometheus.yaml
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
     ports:
       - "${PTH_PORT}:${PTH_PORT}"
     networks:
       - observability-net
+    depends_on:
+      postgres-exporter:
+        condition: service_healthy
+      kafka-exporter:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost ${PTH_PORT} || exit 1"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:${PTH_PORT}/-/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -177,16 +227,25 @@ services:
   grafana:
     image: grafana/grafana:latest
     container_name: grafana
+    environment:
+      - GF_PATHS_PROVISIONING=/var/lib/grafana/provisioning
+    networks:
+      - observability-net
     ports:
       - "${GR_PORT}:${GR_PORT}"
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost ${GR_PORT} || exit 1"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:${GR_PORT}/api/health" ]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 30s
     volumes:
       - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/var/lib/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      prometheus:
+        condition: service_healthy
 
   postgres-exporter:
     image: prometheuscommunity/postgres-exporter:latest
@@ -195,9 +254,13 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATA_SOURCE_NAME: "postgresql://${PG_USER}:${PG_PASSWORD}@postgres:${PG_PORT}/mydb?sslmode=disable"
+      DATA_SOURCE_NAME: "postgresql://${PG_USER}:${PG_PASSWORD}@postgres:${PG_PORT}/pg_db?sslmode=disable"
     ports:
       - "${PG_EXPORT_PORT}:${PG_EXPORT_PORT}"
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:${PG_EXPORT_PORT}/metrics" ]
+    networks:
+      - observability-net
 
   kafka-exporter:
     image: danielqsj/kafka-exporter:latest
@@ -209,6 +272,10 @@ services:
       KAFKA_BROKERS: kafka:${KAFKA_PORT}
     ports:
       - "${KAFKA_EXPORT_PORT}:${KAFKA_EXPORT_PORT}"
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:${KAFKA_EXPORT_PORT}/metrics" ]
+    networks:
+      - observability-net
 
 volumes:
   postgres_data:
@@ -216,7 +283,7 @@ volumes:
   cassandra_data:
   zookeeper_data:
   zookeeper_datalog:
-  kafka_data:
+  kafka_data1:
   schema_registry_data:
   minio_data:
   keycloak_data:
