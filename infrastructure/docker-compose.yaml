@@ -277,6 +277,21 @@ services:
     networks:
       - observability-net
 
+  events-collector-service:
+    build:
+      context: ../events-collector-service
+      dockerfile: Dockerfile
+    container_name: events-collector-service
+    ports:
+      - "8888:8888"
+    networks:
+      - observability-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: events-collector-service
+  cassandra:
+    contact-points: localhost
+    port: 9042
+    keyspace-name: app_keyspace
+    local-datacenter: datacenter1
+    schema-action: create_if_not_exists
+  kafka:
+    bootstrap-servers: kafka
+    consumer:
+      group-id: my-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: io.confluent.kafka.serializers.KafkaAvroDeserializer
+      properties:
+        schema.registry.url: http://localhost:8081
+        specific.avro.reader: true
+
+server:
+  port: 8888
