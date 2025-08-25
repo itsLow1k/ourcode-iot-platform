@@ -45,7 +45,7 @@ dependencies {
 
 tasks.named('test') {
     enabled = false
-    useJUnitPlatform()
+    //    useJUnitPlatform()
 }
 
 avro {
@@ -61,6 +61,6 @@ sourceSets {
 }
 
 bootJar {
-    archiveFileName = 'app.jar'
+    archiveFileName = 'appl.jar'
     mainClass.set('com.oip.eventscollectorservice.EventsCollectorServiceApplication')
 }
